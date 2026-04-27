@@ -1821,7 +1821,7 @@ RowEvolutionSeriesToggle.prototype.beforeReplot = function () {
                             Math.max(this._yaxis.min, forecastValue)
                         );
                         const forecastY = this._yaxis.series_u2p(boundedForecastValue);
-                        const forecastColor = opts.color || this.color || '#d4291f';
+                        const forecastColor = opts.color || this.color;
                         let connectorStart = previousForecastPoint;
 
                         if (!connectorStart) {
