@@ -106,22 +106,12 @@ jobs:
         if: steps.vars.outputs.branch != '' && steps.vuecheck.outputs.vue_modified == '1'
       - name: Prepare git config
         run: |
-          cat <<- EOF > $HOME/.netrc
-            machine github.com
-            login innocraft-automation
-            password $CUSTOM_ACCESS_TOKEN
-            machine api.github.com
-            login innocraft-automation
-            password $CUSTOM_ACCESS_TOKEN
-          EOF
-          chmod 600 $HOME/.netrc
           git config --global user.email "innocraft-automation@users.noreply.github.com"
           git config --global user.name "innocraft-automation"
-          git remote set-url origin https://x-access-token:${{ secrets.CUSTOM_ACCESS_TOKEN }}@github.com/$GITHUB_REPOSITORY
-          if [[ ${{ steps.vars.outputs.islocalbranch }} ]]
+          if [[ "${{ steps.vars.outputs.islocalbranch }}" == "1" ]]
           then
-            git fetch --depth=1 origin $BRANCH_NAME
-            git checkout $BRANCH_NAME
+            git fetch --depth=1 origin "$BRANCH_NAME"
+            git checkout "$BRANCH_NAME"
           fi
         env:
           BRANCH_NAME: ${{ steps.vars.outputs.branch }}
@@ -134,7 +124,7 @@ jobs:
         run: |
           if [[ $( git diff --numstat plugins/*/vue/dist/*.js ) ]]
           then
-            if [[ ! ${{ steps.vars.outputs.islocalbranch }} ]]
+            if [[ "${{ steps.vars.outputs.islocalbranch }}" != "1" ]]
             then
               echo "It's only possible to update local branches automatically. Adding a comment instead."
               echo "failure=1" >> $GITHUB_OUTPUT
@@ -142,9 +132,12 @@ jobs:
               cd $GITHUB_WORKSPACE
               git add plugins/*/vue/dist/*.js plugins/*/vue/dist/*.json
               git commit -m "Build vue files"
-              git push
+              git push "https://x-access-token:${CUSTOM_ACCESS_TOKEN}@github.com/${GITHUB_REPOSITORY}" "HEAD:${BRANCH_NAME}"
             fi
           fi
+        env:
+          BRANCH_NAME: ${{ steps.vars.outputs.branch }}
+          CUSTOM_ACCESS_TOKEN: ${{ secrets.CUSTOM_ACCESS_TOKEN }}
         if: steps.vars.outputs.branch != '' && steps.vuecheck.outputs.vue_modified == '1'
       - uses: actions/github-script@v8
         with:

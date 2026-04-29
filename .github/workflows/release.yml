@@ -73,6 +73,7 @@ jobs:
         with:
           lfs: false
           ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
       - name: Import GPG key
         id: import_gpg
         run: |
@@ -89,9 +90,9 @@ jobs:
       - name: Check preconditions, create tag, build and publish release
         id: tag
         run: |
-          if [[ -n "${{ github.event.inputs.version }}" ]]
+          if [[ -n "$VERSION_FROM_EVENT" ]]
           then
-            version="${{ github.event.inputs.version }}"
+            version="$VERSION_FROM_EVENT"
             echo "Version to re-build: '$version'"
 
             git fetch --tags -q 2>/dev/null
@@ -138,7 +139,7 @@ jobs:
             echo "Creating a tag for $version"
 
             git tag $version
-            git push origin tags/$version
+            git push "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}" tags/$version
 
             echo "update=false" >> $GITHUB_OUTPUT
           fi
@@ -173,6 +174,8 @@ jobs:
           chmod 755 ./.github/scripts/*.sh
           ./.github/scripts/build-package.sh $version
         shell: bash
+        env:
+          VERSION_FROM_EVENT: ${{ github.event.inputs.version }}
       - uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd
         with:
           artifacts: "archives/matomo-${{ steps.tag.outputs.version }}.*,archives/piwik-${{ steps.tag.outputs.version }}.*"

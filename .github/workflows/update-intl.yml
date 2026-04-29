@@ -78,22 +78,14 @@ jobs:
           cat ./config/config.ini.php
       - name: Prepare git config
         run: |
-          cat <<- EOF > $HOME/.netrc
-            machine github.com
-            login $GITHUB_ACTOR
-            password $GITHUB_TOKEN
-            machine api.github.com
-            login $GITHUB_ACTOR
-            password $GITHUB_TOKEN
-          EOF
-          chmod 600 $HOME/.netrc
           git config --global user.email "$GITHUB_ACTOR@users.noreply.github.com"
           git config --global user.name "$GITHUB_ACTOR"
-          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/$GITHUB_REPOSITORY
-          git push origin --delete update-intl || true
+          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}" --delete update-intl || true
           git branch -D update-intl || true
           git branch update-intl
           git checkout -f update-intl
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Update Intl data
         run: php ./console translations:generate-intl-data --cldr-version="${{ steps.cldr.outputs.cldr-version }}"
       - name: Push changes
@@ -104,9 +96,11 @@ jobs:
             cd $GITHUB_WORKSPACE
             git add plugins/Intl/lang/*.json
             git commit -m "Update Intl data from CLDR ${{ steps.cldr.outputs.cldr-version }}"
-            git push --set-upstream origin update-intl
+            git push --set-upstream "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}" update-intl
             echo "updated=1" >> $GITHUB_OUTPUT
           fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Create PR
         run: |
           curl \
