@@ -83,6 +83,7 @@ class Evolution extends JqplotDataGenerator
         $allSeriesData = [];
         $allSeriesDataAvailability = [];
         $allSeriesAllowsDownwardForecast = [];
+        $allSeriesForecastPrecision = [];
         foreach ($rowsToDisplay as $rowIdentifier) {
             $rowLabel = $rowIdentifier;
 
@@ -110,9 +111,11 @@ class Evolution extends JqplotDataGenerator
                         $allSeriesData,
                         $allSeriesDataAvailability,
                         $allSeriesAllowsDownwardForecast,
+                        $allSeriesForecastPrecision,
                         $rowLabel,
                         $columnName,
                         $columnAllowsDownwardForecast,
+                        $units[$columnName] ?? false,
                         $dataTable
                     );
                 } else {
@@ -120,10 +123,12 @@ class Evolution extends JqplotDataGenerator
                         $allSeriesData,
                         $allSeriesDataAvailability,
                         $allSeriesAllowsDownwardForecast,
+                        $allSeriesForecastPrecision,
                         $seriesLabels,
                         $rowLabel,
                         $columnName,
                         $columnAllowsDownwardForecast,
+                        $units[$columnName] ?? false,
                         $dataTable
                     );
                 }
@@ -179,7 +184,8 @@ class Evolution extends JqplotDataGenerator
                 $dataStates,
                 $seriesUnits,
                 $allSeriesDataAvailability,
-                $allSeriesAllowsDownwardForecast
+                $allSeriesAllowsDownwardForecast,
+                $allSeriesForecastPrecision
             )
         );
     }
@@ -191,6 +197,7 @@ class Evolution extends JqplotDataGenerator
      * @param array<string, string|false> $seriesUnits
      * @param array<string, array<int, bool>> $allSeriesDataAvailability
      * @param array<string, bool> $allSeriesAllowsDownwardForecast
+     * @param array<string, int> $allSeriesForecastPrecision
      * @return array<int, array<int, float|null>>
      */
     protected function buildForecastData(
@@ -199,7 +206,8 @@ class Evolution extends JqplotDataGenerator
         array $dataStates,
         array $seriesUnits,
         array $allSeriesDataAvailability,
-        array $allSeriesAllowsDownwardForecast
+        array $allSeriesAllowsDownwardForecast,
+        array $allSeriesForecastPrecision = []
     ): array {
         if (empty($this->properties['show_forecast']) || $this->isComparing) {
             return [];
@@ -220,7 +228,8 @@ class Evolution extends JqplotDataGenerator
             $dataStates,
             $seriesUnits,
             $allSeriesDataAvailability,
-            $allSeriesAllowsDownwardForecast
+            $allSeriesAllowsDownwardForecast,
+            $allSeriesForecastPrecision
         );
     }
 
@@ -268,12 +277,7 @@ class Evolution extends JqplotDataGenerator
         // but whose name reveals ratio shape (e.g. nb_actions_per_visit is TYPE_NUMBER yet
         // genuinely non-monotonic). The avg_ prefix also disambiguates TYPE_DURATION_*/TYPE_BYTE
         // averages from their additive sum_ siblings.
-        if (
-            strpos($columnName, '_rate') !== false
-            || strpos($columnName, '_percentage') !== false
-            || strpos($columnName, 'avg_') === 0
-            || strpos($columnName, '_per_') !== false
-        ) {
+        if ($this->hasRatioShapedColumnName($columnName)) {
             return true;
         }
 
@@ -282,6 +286,78 @@ class Evolution extends JqplotDataGenerator
         // classify, which is safer than emitting a downward forecast on a metric that turns
         // out to be additive (visits, conversions, revenue, …).
         return false;
+    }
+
+    /**
+     * True when a column name carries one of the ratio/average/rate name patterns Matomo uses
+     * for non-monotonic metrics. Shared between the monotonicity classifier and the forecast
+     * precision picker so the two cannot drift on the same set of name fragments.
+     */
+    private function hasRatioShapedColumnName(string $columnName): bool
+    {
+        return strpos($columnName, '_rate') !== false
+            || strpos($columnName, '_percentage') !== false
+            || strpos($columnName, 'avg_') === 0
+            || strpos($columnName, '_per_') !== false;
+    }
+
+    /**
+     * Derive conservative raw forecast payload precision for a metric.
+     *
+     * Integer/count-like metrics should not emit fractional forecast values. Ratios, averages,
+     * durations, money, bytes, floats, and unknown numeric metrics keep up to two decimals.
+     *
+     * @param string|false $columnUnit
+     */
+    private function getForecastPrecisionForColumn(string $columnName, $columnUnit, bool $allowsDownwardForecast): int
+    {
+        if ($columnUnit !== false) {
+            return 2;
+        }
+
+        $semanticType = $this->getMetricSemanticTypes()[$columnName] ?? null;
+
+        if (
+            in_array($semanticType, [
+                Dimension::TYPE_BYTE,
+                Dimension::TYPE_DURATION_MS,
+                Dimension::TYPE_DURATION_S,
+                Dimension::TYPE_FLOAT,
+                Dimension::TYPE_MONEY,
+                Dimension::TYPE_PERCENT,
+            ], true)
+        ) {
+            return 2;
+        }
+
+        // Word-boundary check: an underscore-delimited "time"/"length" segment in the column
+        // name signals a duration- or length-shaped metric (sum_time_spent, time_per_action,
+        // nb_visit_length, length_score). Anchored substring matches avoid false positives on
+        // unrelated names that happen to contain the literal letters (lifetime_*, wavelength).
+        if (
+            $this->hasRatioShapedColumnName($columnName)
+            || strpos($columnName, '_time') !== false
+            || strpos($columnName, 'time_') === 0
+            || strpos($columnName, '_length') !== false
+            || strpos($columnName, 'length_') === 0
+        ) {
+            return 2;
+        }
+
+        if ($semanticType === Dimension::TYPE_NUMBER && !$allowsDownwardForecast) {
+            return 0;
+        }
+
+        if (
+            strpos($columnName, 'nb_') === 0
+            || strpos($columnName, '_nb_') !== false
+            || strpos($columnName, '_count') !== false
+            || in_array($columnName, ['hits', 'items', 'quantity', 'orders', 'goals'], true)
+        ) {
+            return 0;
+        }
+
+        return 2;
     }
 
     private function getSeriesData($rowLabel, $columnName, DataTable\Map $dataTable, &$seriesDataAvailability)
@@ -407,9 +483,11 @@ class Evolution extends JqplotDataGenerator
         array &$allSeriesData,
         array &$allSeriesDataAvailability,
         array &$allSeriesAllowsDownwardForecast,
+        array &$allSeriesForecastPrecision,
         $rowLabel,
         $columnName,
         bool $columnAllowsDownwardForecast,
+        $columnUnit,
         DataTable\Map $dataTable
     ) {
         $seriesLabel = $this->getSeriesLabel($rowLabel, $columnName);
@@ -418,16 +496,23 @@ class Evolution extends JqplotDataGenerator
         $allSeriesData[$seriesLabel] = $seriesData;
         $allSeriesDataAvailability[$seriesLabel] = $seriesDataAvailability;
         $allSeriesAllowsDownwardForecast[$seriesLabel] = $columnAllowsDownwardForecast;
+        $allSeriesForecastPrecision[$seriesLabel] = $this->getForecastPrecisionForColumn(
+            $columnName,
+            $columnUnit,
+            $columnAllowsDownwardForecast
+        );
     }
 
     private function setComparisonSeriesData(
         array &$allSeriesData,
         array &$allSeriesDataAvailability,
         array &$allSeriesAllowsDownwardForecast,
+        array &$allSeriesForecastPrecision,
         array $seriesLabels,
         $rowLabel,
         $columnName,
         bool $columnAllowsDownwardForecast,
+        $columnUnit,
         DataTable\Map $dataTable
     ) {
         foreach ($dataTable->getDataTables() as $label => $childTable) {
@@ -447,6 +532,11 @@ class Evolution extends JqplotDataGenerator
                     $allSeriesData[$wholeSeriesLabel][] = 0;
                     $allSeriesDataAvailability[$wholeSeriesLabel][] = false;
                     $allSeriesAllowsDownwardForecast[$wholeSeriesLabel] = $columnAllowsDownwardForecast;
+                    $allSeriesForecastPrecision[$wholeSeriesLabel] = $this->getForecastPrecisionForColumn(
+                        $columnName,
+                        $columnUnit,
+                        $columnAllowsDownwardForecast
+                    );
                 }
 
                 continue;
@@ -460,6 +550,11 @@ class Evolution extends JqplotDataGenerator
                 $allSeriesData[$seriesLabel][] = $value;
                 $allSeriesDataAvailability[$seriesLabel][] = $this->hasColumnValue($value);
                 $allSeriesAllowsDownwardForecast[$seriesLabel] = $columnAllowsDownwardForecast;
+                $allSeriesForecastPrecision[$seriesLabel] = $this->getForecastPrecisionForColumn(
+                    $columnName,
+                    $columnUnit,
+                    $columnAllowsDownwardForecast
+                );
             }
 
             $totalsRow = $comparisonTable->getTotalsRow();
@@ -469,6 +564,11 @@ class Evolution extends JqplotDataGenerator
                 $allSeriesData[$seriesLabel][] = $value;
                 $allSeriesDataAvailability[$seriesLabel][] = $this->hasColumnValue($value);
                 $allSeriesAllowsDownwardForecast[$seriesLabel] = $columnAllowsDownwardForecast;
+                $allSeriesForecastPrecision[$seriesLabel] = $this->getForecastPrecisionForColumn(
+                    $columnName,
+                    $columnUnit,
+                    $columnAllowsDownwardForecast
+                );
             }
         }
     }
@@ -610,6 +710,7 @@ class Evolution extends JqplotDataGenerator
         $allSeriesData = [];
         $allSeriesDataAvailability = [];
         $allSeriesAllowsDownwardForecast = [];
+        $allSeriesForecastPrecision = [];
         foreach ($rowsToDisplay as $rowIdentifier) {
             $rowLabel = $rowIdentifier;
 
@@ -631,9 +732,11 @@ class Evolution extends JqplotDataGenerator
                     $allSeriesData,
                     $allSeriesDataAvailability,
                     $allSeriesAllowsDownwardForecast,
+                    $allSeriesForecastPrecision,
                     $rowLabel,
                     $columnName,
                     $columnAllowsDownwardForecast,
+                    $units[$columnName] ?? false,
                     $dataTable
                 );
             }
@@ -645,7 +748,8 @@ class Evolution extends JqplotDataGenerator
             $dataStates,
             $seriesUnits,
             $allSeriesDataAvailability,
-            $allSeriesAllowsDownwardForecast
+            $allSeriesAllowsDownwardForecast,
+            $allSeriesForecastPrecision
         );
     }
 }
