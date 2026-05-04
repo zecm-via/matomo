@@ -29,6 +29,10 @@ use Piwik\Url;
  */
 class Evolution extends JqplotDataGenerator
 {
+    public const MONOTONICITY_UP = 'up';
+    public const MONOTONICITY_DOWN = 'down';
+    public const MONOTONICITY_FREE = 'free';
+
     protected function getUnitsForColumnsToDisplay()
     {
         $idSite = Common::getRequestVar('idSite', null, 'int');
@@ -91,8 +95,6 @@ class Evolution extends JqplotDataGenerator
         }
 
         $allSeriesData = $seriesState->getAllSeriesData();
-
-
 
         $visualization->properties = $this->properties;
 
@@ -172,7 +174,7 @@ class Evolution extends JqplotDataGenerator
             $dataStates,
             $seriesUnits,
             $seriesState->getAllSeriesDataAvailability(),
-            $seriesState->getAllSeriesAllowsDownwardForecast(),
+            $seriesState->getAllSeriesMonotonicity(),
             $seriesState->getAllSeriesForecastPrecision()
         );
     }
@@ -192,19 +194,26 @@ class Evolution extends JqplotDataGenerator
     }
 
     /**
-     * Whether forecasts for a given column may legitimately fall below the current partial value.
+     * Classify a column into one of three intra-period directions:
      *
-     * Counts and additive totals only grow within an incomplete period, so their forecast is
-     * gated by the "forecast >= current" rule. Ratios, rates, percentages, and averages can move
-     * either way during the period and need the gate lifted, otherwise valid downward trends are
-     * silently suppressed.
+     * - MONOTONICITY_UP: counts/sums/totals that can only grow within the period
+     *   ("forecast >= current" gate applies).
+     * - MONOTONICITY_DOWN: running mins that can only fall within the period
+     *   ("forecast <= current" gate applies).
+     * - MONOTONICITY_FREE: ratios, rates, percentages, averages whose value can move in either
+     *   direction within the period (no gate).
+     *
+     * Driven by column unit, semantic type, and a small name-convention layer. The convention
+     * layer cannot disambiguate metrics whose names look like counts but are actually ratios
+     * (ctr, position, web-vitals percentiles); those need a dedicated plugin signal.
      *
      * @param string|false $columnUnit
+     * @return self::MONOTONICITY_*
      */
-    private function columnAllowsDownwardForecast(string $columnName, $columnUnit): bool
+    private function getColumnMonotonicity(string $columnName, $columnUnit): string
     {
         if ($columnUnit === '%') {
-            return true;
+            return self::MONOTONICITY_FREE;
         }
 
         // TYPE_PERCENT and TYPE_FLOAT are non-monotonic by construction (a percentage's or a
@@ -214,7 +223,7 @@ class Evolution extends JqplotDataGenerator
         // needing a magic name.
         $semanticType = $this->getMetricSemanticTypes()[$columnName] ?? null;
         if ($semanticType === Dimension::TYPE_PERCENT || $semanticType === Dimension::TYPE_FLOAT) {
-            return true;
+            return self::MONOTONICITY_FREE;
         }
 
         // Name-pattern fallback for metrics whose semantic type is the ambiguous TYPE_NUMBER
@@ -222,14 +231,22 @@ class Evolution extends JqplotDataGenerator
         // genuinely non-monotonic). The avg_ prefix also disambiguates TYPE_DURATION_*/TYPE_BYTE
         // averages from their additive sum_ siblings.
         if ($this->hasRatioShapedColumnName($columnName)) {
-            return true;
+            return self::MONOTONICITY_FREE;
         }
 
-        // Default unknown metrics to monotonic count behaviour. The "forecast >= current" gate
-        // then suppresses obviously-wrong forecasts on metrics whose semantics we cannot
+        // min_* metrics carry a structural invariant: more samples within the period can only
+        // pull the running min down or leave it unchanged. The default monotonic-up gate would
+        // render upward-projecting forecasts on a metric that cannot rise, so flip to a
+        // monotonic-down gate instead.
+        if (strpos($columnName, 'min_') === 0) {
+            return self::MONOTONICITY_DOWN;
+        }
+
+        // Default unknown metrics to monotonic-up count behaviour. The "forecast >= current"
+        // gate then suppresses obviously-wrong forecasts on metrics whose semantics we cannot
         // classify, which is safer than emitting a downward forecast on a metric that turns
         // out to be additive (visits, conversions, revenue, …).
-        return false;
+        return self::MONOTONICITY_UP;
     }
 
     /**
@@ -251,9 +268,15 @@ class Evolution extends JqplotDataGenerator
      * Integer/count-like metrics should not emit fractional forecast values. Ratios, averages,
      * durations, money, bytes, floats, and unknown numeric metrics keep up to two decimals.
      *
+     * Both MONOTONICITY_UP and MONOTONICITY_DOWN are treated as "monotonic" for precision —
+     * a min_* count metric should round to integers the same way an additive nb_* count does.
+     * Only MONOTONICITY_FREE (ratios/averages/percentages) keeps the two-decimal default for
+     * TYPE_NUMBER metrics, which is the original allowsDownward = true behaviour.
+     *
      * @param string|false $columnUnit
+     * @param self::MONOTONICITY_* $monotonicity
      */
-    private function getForecastPrecisionForColumn(string $columnName, $columnUnit, bool $allowsDownwardForecast): int
+    private function getForecastPrecisionForColumn(string $columnName, $columnUnit, string $monotonicity): int
     {
         if ($columnUnit !== false) {
             return 2;
@@ -288,7 +311,7 @@ class Evolution extends JqplotDataGenerator
             return 2;
         }
 
-        if ($semanticType === Dimension::TYPE_NUMBER && !$allowsDownwardForecast) {
+        if ($semanticType === Dimension::TYPE_NUMBER && $monotonicity !== self::MONOTONICITY_FREE) {
             return 0;
         }
 
@@ -453,7 +476,7 @@ class Evolution extends JqplotDataGenerator
 
         $allSeriesData = [];
         $allSeriesDataAvailability = [];
-        $allSeriesAllowsDownwardForecast = [];
+        $allSeriesMonotonicity = [];
         $allSeriesForecastPrecision = [];
 
         foreach ($rowsToDisplay as $rowIdentifier) {
@@ -469,19 +492,19 @@ class Evolution extends JqplotDataGenerator
 
             foreach ($columnsToDisplay as $columnName) {
                 $columnUnit = $units[$columnName] ?? false;
-                $columnAllowsDownwardForecast = $forecastEnabled
-                    ? $this->columnAllowsDownwardForecast($columnName, $columnUnit)
-                    : false;
+                $columnMonotonicity = $forecastEnabled
+                    ? $this->getColumnMonotonicity($columnName, $columnUnit)
+                    : Evolution::MONOTONICITY_UP;
 
                 if (!$this->isComparing) {
                     $this->setNonComparisonSeriesData(
                         $allSeriesData,
                         $allSeriesDataAvailability,
-                        $allSeriesAllowsDownwardForecast,
+                        $allSeriesMonotonicity,
                         $allSeriesForecastPrecision,
                         $rowLabel,
                         $columnName,
-                        $columnAllowsDownwardForecast,
+                        $columnMonotonicity,
                         $columnUnit,
                         $dataTable,
                         $forecastEnabled
@@ -490,12 +513,12 @@ class Evolution extends JqplotDataGenerator
                     $this->setComparisonSeriesData(
                         $allSeriesData,
                         $allSeriesDataAvailability,
-                        $allSeriesAllowsDownwardForecast,
+                        $allSeriesMonotonicity,
                         $allSeriesForecastPrecision,
                         $seriesLabels,
                         $rowLabel,
                         $columnName,
-                        $columnAllowsDownwardForecast,
+                        $columnMonotonicity,
                         $columnUnit,
                         $dataTable,
                         $forecastEnabled
@@ -507,7 +530,7 @@ class Evolution extends JqplotDataGenerator
         return new ForecastSeriesState(
             $allSeriesData,
             $allSeriesDataAvailability,
-            $allSeriesAllowsDownwardForecast,
+            $allSeriesMonotonicity,
             $allSeriesForecastPrecision
         );
     }
@@ -515,17 +538,17 @@ class Evolution extends JqplotDataGenerator
     /**
      * @param array<string, array<int, float|int>> $allSeriesData
      * @param array<string, array<int, bool>> $allSeriesDataAvailability
-     * @param array<string, bool> $allSeriesAllowsDownwardForecast
+     * @param array<string, string> $allSeriesMonotonicity
      * @param array<string, int> $allSeriesForecastPrecision
      */
     private function setNonComparisonSeriesData(
         array &$allSeriesData,
         array &$allSeriesDataAvailability,
-        array &$allSeriesAllowsDownwardForecast,
+        array &$allSeriesMonotonicity,
         array &$allSeriesForecastPrecision,
         $rowLabel,
         $columnName,
-        bool $columnAllowsDownwardForecast,
+        string $columnMonotonicity,
         $columnUnit,
         DataTable\Map $dataTable,
         bool $forecastEnabled
@@ -540,36 +563,36 @@ class Evolution extends JqplotDataGenerator
         }
 
         $allSeriesDataAvailability[$seriesLabel] = $seriesDataAvailability;
-        $allSeriesAllowsDownwardForecast[$seriesLabel] = $columnAllowsDownwardForecast;
+        $allSeriesMonotonicity[$seriesLabel] = $columnMonotonicity;
         $allSeriesForecastPrecision[$seriesLabel] = $this->getForecastPrecisionForColumn(
             $columnName,
             $columnUnit,
-            $columnAllowsDownwardForecast
+            $columnMonotonicity
         );
     }
 
     /**
      * @param array<string, array<int, float|int>> $allSeriesData
      * @param array<string, array<int, bool>> $allSeriesDataAvailability
-     * @param array<string, bool> $allSeriesAllowsDownwardForecast
+     * @param array<string, string> $allSeriesMonotonicity
      * @param array<string, int> $allSeriesForecastPrecision
      * @param array<int, string> $seriesLabels
      */
     private function setComparisonSeriesData(
         array &$allSeriesData,
         array &$allSeriesDataAvailability,
-        array &$allSeriesAllowsDownwardForecast,
+        array &$allSeriesMonotonicity,
         array &$allSeriesForecastPrecision,
         array $seriesLabels,
         $rowLabel,
         $columnName,
-        bool $columnAllowsDownwardForecast,
+        string $columnMonotonicity,
         $columnUnit,
         DataTable\Map $dataTable,
         bool $forecastEnabled
     ): void {
         $forecastPrecision = $forecastEnabled
-            ? $this->getForecastPrecisionForColumn($columnName, $columnUnit, $columnAllowsDownwardForecast)
+            ? $this->getForecastPrecisionForColumn($columnName, $columnUnit, $columnMonotonicity)
             : 0;
 
         foreach ($dataTable->getDataTables() as $label => $childTable) {
@@ -593,7 +616,7 @@ class Evolution extends JqplotDataGenerator
                     }
 
                     $allSeriesDataAvailability[$wholeSeriesLabel][] = false;
-                    $allSeriesAllowsDownwardForecast[$wholeSeriesLabel] = $columnAllowsDownwardForecast;
+                    $allSeriesMonotonicity[$wholeSeriesLabel] = $columnMonotonicity;
                     $allSeriesForecastPrecision[$wholeSeriesLabel] = $forecastPrecision;
                 }
 
@@ -612,7 +635,7 @@ class Evolution extends JqplotDataGenerator
                 }
 
                 $allSeriesDataAvailability[$seriesLabel][] = $this->hasColumnValue($value);
-                $allSeriesAllowsDownwardForecast[$seriesLabel] = $columnAllowsDownwardForecast;
+                $allSeriesMonotonicity[$seriesLabel] = $columnMonotonicity;
                 $allSeriesForecastPrecision[$seriesLabel] = $forecastPrecision;
             }
 
@@ -627,7 +650,7 @@ class Evolution extends JqplotDataGenerator
                 }
 
                 $allSeriesDataAvailability[$seriesLabel][] = $this->hasColumnValue($value);
-                $allSeriesAllowsDownwardForecast[$seriesLabel] = $columnAllowsDownwardForecast;
+                $allSeriesMonotonicity[$seriesLabel] = $columnMonotonicity;
                 $allSeriesForecastPrecision[$seriesLabel] = $forecastPrecision;
             }
         }
@@ -783,7 +806,7 @@ class Evolution extends JqplotDataGenerator
             $dataStates,
             $seriesUnits,
             $seriesState->getAllSeriesDataAvailability(),
-            $seriesState->getAllSeriesAllowsDownwardForecast(),
+            $seriesState->getAllSeriesMonotonicity(),
             $seriesState->getAllSeriesForecastPrecision()
         );
     }
