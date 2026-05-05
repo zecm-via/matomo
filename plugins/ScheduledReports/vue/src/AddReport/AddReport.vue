@@ -27,7 +27,7 @@
         >
         </Field>
       </div>
-      <div>
+      <div :class="{ 'scheduled-reports-field-invalid': validationErrors.description }">
         <Field
           uicontrol="textarea"
           name="report_description"
@@ -38,6 +38,12 @@
           :inline-help="translate('ScheduledReports_DescriptionOnFirstPageScheduledReport')"
         >
         </Field>
+        <p
+          v-if="validationErrors.description"
+          class="scheduled-reports-field-error"
+        >
+          {{ translate('ScheduledReports_ReportMissingDescription', '', '') }}
+        </p>
       </div>
       <div v-if="segmentEditorActivated">
         <Field
@@ -240,7 +246,20 @@
         </div>
       </div>
       <div class="row">
-        <h3 class="col s12">{{ translate('ScheduledReports_ReportsIncluded') }}</h3>
+        <h3
+          id="scheduled-reports-selection-heading"
+          class="col s12"
+        >
+          {{ translate('ScheduledReports_ReportsIncluded') }}
+        </h3>
+        <p
+          :class="{
+            'col s12 scheduled-reports-field-help': true,
+            'scheduled-reports-field-error': validationErrors.reports,
+          }"
+        >
+          {{ translate('ScheduledReports_ReportsIncludedHelp') }}
+        </p>
       </div>
       <div
         name="reportsList"
@@ -383,6 +402,13 @@ export default defineComponent({
     periods: {
       type: Object,
       required: true,
+    },
+    validationErrors: {
+      type: Object,
+      default: () => ({
+        description: false,
+        reports: false,
+      }),
     },
   },
   emits: ['submit', 'change', 'toggleSelectedReport', 'reorderSelectedReports'],

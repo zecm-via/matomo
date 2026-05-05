@@ -1,4 +1,20 @@
 .emailReports {
+  .scheduled-reports-field-help {
+    color: @theme-color-text-lighter;
+    margin-top: 0;
+    margin-bottom: 0.75rem;
+  }
+  .scheduled-reports-field-invalid {
+    textarea.materialize-textarea {
+      border-bottom-color: @color-red-matomo;
+      box-shadow: 0 1px 0 0 @color-red-matomo;
+    }
+
+    label {
+      color: @color-red-matomo;
+    }
+  }
+
   .entityTableContainer {
     margin-top: 0;
   }
@@ -38,6 +54,12 @@
 }
 .periodTooltipList {
   padding-bottom: 10px;
+}
+
+#content .emailReports .scheduled-reports-field-error {
+  color: @color-red-matomo;
+  margin-top: 0.4rem;
+  margin-bottom: 0;
 }
 .selectedReportsWrapper {
   font-size: 1rem;
