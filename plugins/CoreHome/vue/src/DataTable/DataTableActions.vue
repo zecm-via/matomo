@@ -89,6 +89,7 @@
         apiMethod: apiMethodToRequestDataTable,
         reportFormats,
         maxFilterLimit,
+        canExportFlat: exportSupportsFlat,
       }"
       :title="translate('General_ExportThisReport')"
       href=""
@@ -332,6 +333,12 @@ export default defineComponent({
       type: String,
       default: 'footer',
     },
+  },
+  data() {
+    return {
+      exportSupportsFlat: !!this.showFlattenTable
+        || isBooleanLikeSet(this.clientSideParameters.flat),
+    };
   },
   components: {
     Passthrough,
