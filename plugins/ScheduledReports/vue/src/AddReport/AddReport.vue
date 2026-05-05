@@ -35,7 +35,7 @@
           :model-value="report.description"
           @update:model-value="$emit('change', { prop: 'description', value: $event })"
           :ui-control-attributes="{ class: 'compact-textarea' }"
-          :inline-help="translate('ScheduledReports_DescriptionOnFirstPageScheduledReport')"
+          :inline-help="translate('ScheduledReports_DescriptionOnReportAndReportsList')"
         >
         </Field>
         <p

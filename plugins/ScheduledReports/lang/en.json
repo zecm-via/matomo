@@ -10,7 +10,7 @@
         "CreateAndScheduleReport": "Create and Schedule a report",
         "CreateReport": "Create Report",
         "CustomVisitorSegment": "Custom Visitor Segment:",
-        "DescriptionOnFirstPageScheduledReport": "This description is mandatory, and will be displayed in the report. It is also used to identify the report on the created reports list.",
+        "DescriptionOnReportAndReportsList": "This description is mandatory, and will be displayed in the report. It is also used to identify the report on the created reports list.",
         "DisplayFormat_TablesOnly": "Display Tables only (no graphs)",
         "EmailHello": "Hello,",
         "EvolutionGraph": "Show Historical Graphs for the top %s values",
