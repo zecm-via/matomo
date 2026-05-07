@@ -177,7 +177,7 @@ describe('ScheduledReports/AddReport', () => {
       },
     });
 
-    const reportsHelp = wrapper.find('#scheduled-reports-selection-heading + p');
+    const reportsHelp = wrapper.find('#scheduled-reports-selection-heading + div');
 
     expect(reportsHelp.exists()).toBe(true);
     expect(reportsHelp.classes()).toContain('scheduled-reports-field-help');
