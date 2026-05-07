@@ -60,7 +60,7 @@ jest.mock('CoreHome', () => ({
 
 jest.mock('CorePluginsAdmin', () => ({
   Field: {
-    template: '<div class="field-stub"><p v-if="errorMessage" class="matomo-form-field-error-message">{{ errorMessage }}</p><slot /><slot name="inline-help" /></div>',
+    template: '<div class="field-stub"><div v-if="errorMessage" class="matomo-form-field-error-message">{{ errorMessage }}</div><slot /><slot name="inline-help" /></div>',
     props: ['title', 'modelValue', 'uiControlAttributes', 'inlineHelp', 'errorMessage'],
   },
   Form: {},

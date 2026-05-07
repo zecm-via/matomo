@@ -39,12 +39,12 @@
         @check:isValid="onCheckIsValid($event)"
       >
       </component>
-      <p
+      <div
         v-if="formField.errorMessage"
         class="matomo-form-field-error-message"
       >
         {{ formField.errorMessage }}
-      </p>
+      </div>
     </div>
     <div
       class="col s12"
