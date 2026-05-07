@@ -249,14 +249,14 @@
         >
           {{ translate('ScheduledReports_ReportsIncluded') }}
         </h3>
-        <p
+        <div
           :class="{
             'col s12 scheduled-reports-field-help': true,
             'matomo-form-field-error-message': validationErrors.reports,
           }"
         >
           {{ translate('ScheduledReports_ReportsIncludedHelp') }}
-        </p>
+        </div>
       </div>
       <div
         name="reportsList"
