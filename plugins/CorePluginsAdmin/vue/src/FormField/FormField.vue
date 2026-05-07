@@ -8,6 +8,7 @@
 <template>
   <div
     class="form-group row matomo-form-field"
+    :class="{ 'matomo-form-field-error': formField.errorMessage }"
   >
     <h3
       v-if="formField.introduction"
@@ -38,6 +39,12 @@
         @check:isValid="onCheckIsValid($event)"
       >
       </component>
+      <p
+        v-if="formField.errorMessage"
+        class="matomo-form-field-error-message"
+      >
+        {{ formField.errorMessage }}
+      </p>
     </div>
     <div
       class="col s12"
@@ -163,6 +170,7 @@ interface FormField {
   component: Component | ComponentReference;
   inlineHelp?: string;
   inlineHelpBind?: unknown;
+  errorMessage?: string;
 }
 
 interface OptionLike {

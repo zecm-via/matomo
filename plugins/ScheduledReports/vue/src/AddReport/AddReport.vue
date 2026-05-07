@@ -27,7 +27,7 @@
         >
         </Field>
       </div>
-      <div :class="{ 'scheduled-reports-field-invalid': validationErrors.description }">
+      <div>
         <Field
           uicontrol="textarea"
           name="report_description"
@@ -36,14 +36,11 @@
           @update:model-value="$emit('change', { prop: 'description', value: $event })"
           :ui-control-attributes="{ class: 'compact-textarea' }"
           :inline-help="translate('ScheduledReports_DescriptionOnReportAndReportsList')"
+          :error-message="validationErrors.description
+            ? translate('ScheduledReports_ReportMissingDescription', '', '')
+            : ''"
         >
         </Field>
-        <p
-          v-if="validationErrors.description"
-          class="scheduled-reports-field-error"
-        >
-          {{ translate('ScheduledReports_ReportMissingDescription', '', '') }}
-        </p>
       </div>
       <div v-if="segmentEditorActivated">
         <Field
@@ -255,7 +252,7 @@
         <p
           :class="{
             'col s12 scheduled-reports-field-help': true,
-            'scheduled-reports-field-error': validationErrors.reports,
+            'matomo-form-field-error-message': validationErrors.reports,
           }"
         >
           {{ translate('ScheduledReports_ReportsIncludedHelp') }}

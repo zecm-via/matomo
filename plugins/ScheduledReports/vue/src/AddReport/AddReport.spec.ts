@@ -60,8 +60,8 @@ jest.mock('CoreHome', () => ({
 
 jest.mock('CorePluginsAdmin', () => ({
   Field: {
-    template: '<div class="field-stub"><slot /><slot name="inline-help" /></div>',
-    props: ['title', 'modelValue', 'uiControlAttributes', 'inlineHelp'],
+    template: '<div class="field-stub"><p v-if="errorMessage" class="matomo-form-field-error-message">{{ errorMessage }}</p><slot /><slot name="inline-help" /></div>',
+    props: ['title', 'modelValue', 'uiControlAttributes', 'inlineHelp', 'errorMessage'],
   },
   Form: {},
   SaveButton: {
@@ -181,7 +181,7 @@ describe('ScheduledReports/AddReport', () => {
 
     expect(reportsHelp.exists()).toBe(true);
     expect(reportsHelp.classes()).toContain('scheduled-reports-field-help');
-    expect(reportsHelp.classes()).toContain('scheduled-reports-field-error');
+    expect(reportsHelp.classes()).toContain('matomo-form-field-error-message');
     expect(reportsHelp.text()).toBe('Choose at least one report to include in this scheduled report.');
   });
 });
