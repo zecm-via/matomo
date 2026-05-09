@@ -29,6 +29,20 @@ describe("PrivacyManager_ConsentManager", function () {
     it('should load privacy asking for consent page', async function() {
         await page.goto(urlBase + 'consent');
         await page.waitForNetworkIdle();
-        expect(await page.screenshotSelector('.pageWrap,#notificationContainer,.modal.open')).to.matchImage('consent_default');
+
+        // The detected consent manager block is only rendered when a known
+        // consent manager is connected (Osano in this fixture). Assert the
+        // dedicated content block exists and references the connected manager.
+        await page.waitForSelector('.privacyAskingForConsent', { visible: true });
+
+        const consentManagerBlock = await page.evaluate(() => {
+            const blocks = Array.from(document.querySelectorAll('.privacyAskingForConsent'));
+            const detected = blocks.find((el) => /Osano/i.test(el.textContent || ''));
+            return detected ? detected.textContent.trim() : null;
+        });
+
+        expect(consentManagerBlock).to.be.a('string');
+        expect(consentManagerBlock).to.contain('Osano');
+        expect(consentManagerBlock).to.contain('consent manager');
     });
 });

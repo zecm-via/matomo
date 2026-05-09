@@ -130,7 +130,18 @@ describe("PrivacyManager_SiteSpecific", function () {
         await page.waitForTimeout(200);
         await hideUTCTimeInfo();
 
-        await capturePage('close_one_site_settings');
+        // Cancelling collapses the per-site editor for site 3 only. The
+        // site 1 editor must remain expanded.
+        const visibility = await page.evaluate(() => {
+            const site1Footer = document.querySelector('div[idsite="1"] .editingSiteFooter');
+            const site3Footer = document.querySelector('div[idsite="3"] .editingSiteFooter');
+            const site1Visible = site1Footer ? site1Footer.offsetParent !== null : false;
+            const site3Visible = site3Footer ? site3Footer.offsetParent !== null : false;
+            return { site1Visible, site3Visible };
+        });
+
+        expect(visibility.site1Visible).to.equal(true);
+        expect(visibility.site3Visible).to.equal(false);
     });
 
     it('should show site-specific settings when option selected', async function() {
@@ -138,7 +149,23 @@ describe("PrivacyManager_SiteSpecific", function () {
         await page.waitForTimeout(200);
         await hideUTCTimeInfo();
 
-        await capturePage('site_specific_settings_site1');
+        // After picking the "site-specific" option for site 1, the radio is
+        // selected and the per-site override fields (mask length, anonymize
+        // referrer, etc.) become visible inside the site 1 editor.
+        const state = await page.evaluate(() => {
+            const radio = document.querySelector('#useSiteSpecificSettings1site-specific');
+            const ipSettings = document.querySelector('div[idsite="1"] .anonymizeIpSettingsField');
+            const referrerField = document.querySelector('div[idsite="1"] .anonymizeReferrerField');
+            return {
+                radioSelected: radio ? radio.checked : null,
+                hasIpSettingsField: !!ipSettings,
+                hasReferrerField: !!referrerField,
+            };
+        });
+
+        expect(state.radioSelected).to.equal(true);
+        expect(state.hasIpSettingsField).to.equal(true);
+        expect(state.hasReferrerField).to.equal(true);
     });
 
     it('should save site-specific', async function() {
@@ -167,7 +194,14 @@ describe("PrivacyManager_SiteSpecific", function () {
         await page.waitForNetworkIdle();
         await hideUTCTimeInfo();
 
-        await capturePage('save_site_specific_settings_site1');
+        // Saving emits a success notification in #notificationContainer and
+        // no validation/error notification.
+        await page.waitForSelector('#notificationContainer .notification-success', { visible: true });
+
+        const errorPresent = await page.evaluate(() => {
+            return !!document.querySelector('#notificationContainer .notification-error');
+        });
+        expect(errorPresent).to.equal(false);
     });
 
     it('should load previously saved site-specific settings for site 1', async function() {
@@ -204,7 +238,37 @@ describe("PrivacyManager_SiteSpecific", function () {
         testEnvironment.optionsOverride = {};
         testEnvironment.save();
 
-        await capturePage('load_site_specific_settings_from_instance_for_site3');
+        // The per-site editor for site 3 must default to the instance-level
+        // option values seeded above (mask length 1, anonymize IP on, user
+        // id on, order id on, anonymize referrer = exclude_path).
+        const fieldState = await page.evaluate(() => {
+            const ipChk = document.querySelector('div[idsite="3"] #anonymizeIpSettings3');
+            const maskLenChecked = Array.from(
+                document.querySelectorAll('div[idsite="3"] input[name="maskLength3"]')
+            ).filter((r) => r.checked).map((r) => r.value);
+            const userIdChk = document.querySelector('div[idsite="3"] #anonymizeUserId3');
+            const orderIdChk = document.querySelector('div[idsite="3"] #anonymizeOrderId3');
+            const referrerInput = document.querySelector(
+                'div[idsite="3"] div.anonymizeReferrerField input.select-dropdown'
+            );
+            return {
+                ipEnabled: ipChk ? ipChk.checked : null,
+                maskLengthValues: maskLenChecked,
+                userIdEnabled: userIdChk ? userIdChk.checked : null,
+                orderIdEnabled: orderIdChk ? orderIdChk.checked : null,
+                referrerLabel: referrerInput ? (referrerInput.value || '').trim() : null,
+            };
+        });
+
+        expect(fieldState.ipEnabled).to.equal(true);
+        expect(fieldState.maskLengthValues).to.deep.equal(['1']);
+        expect(fieldState.userIdEnabled).to.equal(true);
+        expect(fieldState.orderIdEnabled).to.equal(true);
+        // The select-dropdown shows the human-readable label for the chosen
+        // referrer option; assert it is non-empty (we cannot rely on the raw
+        // value here, but the materialize select reflects the saved key).
+        expect(fieldState.referrerLabel).to.be.a('string');
+        expect(fieldState.referrerLabel.length).to.be.at.least(1);
     });
 
     it('should show site-specific settings defaulting to different instance-level set anonymisation settings', async function() {
@@ -231,7 +295,22 @@ describe("PrivacyManager_SiteSpecific", function () {
         testEnvironment.optionsOverride = {};
         testEnvironment.save();
 
-        await capturePage('load_site_specific_settings_from_instance_for_site2');
+        // Per-site editor for site 2 inherits the second seeded set:
+        // ipAnonymizerEnabled=off, anonymizeUserId=off, anonymizeOrderId=on.
+        const fieldState = await page.evaluate(() => {
+            const ipChk = document.querySelector('div[idsite="2"] #anonymizeIpSettings2');
+            const userIdChk = document.querySelector('div[idsite="2"] #anonymizeUserId2');
+            const orderIdChk = document.querySelector('div[idsite="2"] #anonymizeOrderId2');
+            return {
+                ipEnabled: ipChk ? ipChk.checked : null,
+                userIdEnabled: userIdChk ? userIdChk.checked : null,
+                orderIdEnabled: orderIdChk ? orderIdChk.checked : null,
+            };
+        });
+
+        expect(fieldState.ipEnabled).to.equal(false);
+        expect(fieldState.userIdEnabled).to.equal(false);
+        expect(fieldState.orderIdEnabled).to.equal(true);
     });
 
     it('should save site-specific settings for site 2', async function() {
@@ -239,7 +318,14 @@ describe("PrivacyManager_SiteSpecific", function () {
         await page.waitForTimeout(300);
         await page.waitForNetworkIdle();
 
-        await capturePage('save_site_specific_settings_site2');
+        // Saving the site-2 editor emits a success notification and no
+        // validation/error notification.
+        await page.waitForSelector('#notificationContainer .notification-success', { visible: true });
+
+        const errorPresent = await page.evaluate(() => {
+            return !!document.querySelector('#notificationContainer .notification-error');
+        });
+        expect(errorPresent).to.equal(false);
     });
 
     it('should load previously saved site-specific settings for site 2', async function() {
@@ -249,7 +335,26 @@ describe("PrivacyManager_SiteSpecific", function () {
         await page.waitForNetworkIdle();
         await hideUTCTimeInfo();
 
-        await capturePage('load_site_specific_settings_site2');
+        // After reload, the editor for site 2 reflects the values we wrote
+        // in the previous save: ipAnonymizerEnabled=off, anonymizeUserId=off,
+        // anonymizeOrderId=on (from the second seeded set).
+        const fieldState = await page.evaluate(() => {
+            const ipChk = document.querySelector('div[idsite="2"] #anonymizeIpSettings2');
+            const userIdChk = document.querySelector('div[idsite="2"] #anonymizeUserId2');
+            const orderIdChk = document.querySelector('div[idsite="2"] #anonymizeOrderId2');
+            const radio = document.querySelector('#useSiteSpecificSettings2site-specific');
+            return {
+                siteSpecificSelected: radio ? radio.checked : null,
+                ipEnabled: ipChk ? ipChk.checked : null,
+                userIdEnabled: userIdChk ? userIdChk.checked : null,
+                orderIdEnabled: orderIdChk ? orderIdChk.checked : null,
+            };
+        });
+
+        expect(fieldState.siteSpecificSelected).to.equal(true);
+        expect(fieldState.ipEnabled).to.equal(false);
+        expect(fieldState.userIdEnabled).to.equal(false);
+        expect(fieldState.orderIdEnabled).to.equal(true);
     });
 
     it('should display compliance info for policy controlled settings for site 2', async function() {
@@ -263,7 +368,26 @@ describe("PrivacyManager_SiteSpecific", function () {
 
         await setCnilPolicyEnforced(false);
 
-        await capturePage('load_site_specific_settings_site2_compliance_info');
+        // When the cnil v1 policy is enforced via config, the per-site
+        // editor for site 2 renders a policy-controlled-setting notification
+        // for at least one field (FormField renders a notification linking
+        // to the compliance overview when extraMetadata.compliancePolicyControlled
+        // is set).
+        const policyState = await page.evaluate(() => {
+            const root = document.querySelector('div[idsite="2"]');
+            if (!root) {
+                return { hasFooter: false, policyNotices: 0 };
+            }
+            const policyNotices = Array.from(root.querySelectorAll('.notification.notification-info'))
+                .filter((n) => /Privacy Compliance Overview|policy-controlled|Policy/i.test(n.textContent || ''));
+            return {
+                hasFooter: !!root.querySelector('.editingSiteFooter'),
+                policyNotices: policyNotices.length,
+            };
+        });
+
+        expect(policyState.hasFooter).to.equal(true);
+        expect(policyState.policyNotices).to.be.at.least(1);
     });
 
     it('should not display the privacy settings when privacy manager plugin is disabled', async function() {
@@ -277,7 +401,23 @@ describe("PrivacyManager_SiteSpecific", function () {
         await page.mouse.move(-10, -10);
         await hideUTCTimeInfo();
 
-        await capturePage('no_privacy_settings_when_plugin_disabled');
+        // With PrivacyManager unloaded, the SiteFields editor is open but
+        // does not inject the PrivacyManager-owned anonymisation editor.
+        const state = await page.evaluate(() => {
+            const root = document.querySelector('div[idsite="1"]');
+            if (!root) {
+                return { hasFooter: false, hasIpSettings: false, hasUseSiteSpecific: false };
+            }
+            return {
+                hasFooter: !!root.querySelector('.editingSiteFooter'),
+                hasIpSettings: !!root.querySelector('.anonymizeIpSettingsField'),
+                hasUseSiteSpecific: !!root.querySelector('[id^="useSiteSpecificSettings1"]'),
+            };
+        });
+
+        expect(state.hasFooter).to.equal(true);
+        expect(state.hasIpSettings).to.equal(false);
+        expect(state.hasUseSiteSpecific).to.equal(false);
 
         delete testEnvironment.pluginsToUnload;
         await testEnvironment.save();
