@@ -56,6 +56,10 @@ concurrency:
   group: php-${{ inputs.ref || github.ref }}
   cancel-in-progress: true
 
+env:
+  PHP_TEST_ENVIRONMENTS: >-
+    [{"php":"7.2","adapter":"PDO_MYSQL","mysql-engine":"Mysql","mysql-version":"5.7"},{"php":"8.2","adapter":"PDO_MYSQL","mysql-engine":"Mariadb","mysql-version":"11.4"},{"php":"8.5","adapter":"MYSQLI","mysql-engine":"Mysql","mysql-version":"8.0"}]
+
 jobs:
   PHP:
     name: PHP (UnitTests, ${{ matrix.environment.php }}, ${{ matrix.environment.adapter }}, ${{ matrix.environment.mysql-engine }}, ${{ matrix.environment.mysql-version }})
@@ -103,7 +107,7 @@ jobs:
     strategy:
       fail-fast: ${{ inputs.is_preview == true }}
       matrix:
-        type: [ 'SystemTestsPlugins', 'SystemTestsCore', 'IntegrationTestsCore', 'IntegrationTestsPlugins' ]
+        type: [ 'SystemTestsCore' ]
         environment:
           - php: '7.2'
             adapter: 'PDO_MYSQL'
@@ -136,6 +140,204 @@ jobs:
           redis-service: true
           artifacts-pass: ${{ secrets.ARTIFACTS_PASS }}
           upload-artifacts: ${{ matrix.environment.php == '7.2' }}
+          testomatio: ${{ secrets.TESTOMATIO_INTEGRATION }}
+          testomatio-force-report: ${{ contains('schedule,push', github.event_name) && github.run_attempt < 2 }}
+  generate-system-plugins-matrix:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.generate.outputs.system_plugins_matrix }}
+      count: ${{ steps.generate.outputs.system_plugins_count }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: false
+          persist-credentials: false
+          submodules: true
+          path: matomo
+          ref: ${{ inputs.ref || github.ref }}
+      - name: Generate matrix
+        id: generate
+        run: |
+          python3 matomo/.github/scripts/generate_matomo_test_matrices.py \
+            --repo-root matomo \
+            --type system-plugins \
+            --bucket-count "${{ vars.MATOMO_SYSTEM_PLUGINS_BUCKET_COUNT || 12 }}"
+  SystemTestsPlugins:
+    name: SystemTestsPlugins (${{ matrix.bucket-label }}, ${{ matrix.php }}, ${{ matrix.adapter }}, ${{ matrix.mysql-engine }}, ${{ matrix.mysql-version }})
+    needs: generate-system-plugins-matrix
+    if: ${{ needs.generate-system-plugins-matrix.outputs.count != '0' }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: ${{ inputs.is_preview == true }}
+      max-parallel: ${{ fromJson(vars.MATOMO_SYSTEM_PLUGINS_MAX_PARALLEL || '12') }}
+      matrix:
+        include: ${{ fromJson(needs.generate-system-plugins-matrix.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: false
+          persist-credentials: false
+          submodules: true
+          path: matomo
+          ref: ${{ inputs.ref || github.ref }}
+      - name: Prune to bucket
+        shell: bash
+        run: |
+          keep_file="$(mktemp)"
+          cat > "$keep_file" <<'KEEP_PATHS_EOF'
+          ${{ matrix.keep-paths }}
+          KEEP_PATHS_EOF
+          python3 matomo/.github/scripts/generate_matomo_test_matrices.py \
+            --repo-root matomo \
+            --type system-plugins \
+            --list-in-scope \
+            | while IFS= read -r path; do
+                [ -n "$path" ] || continue
+                grep -Fxq "$path" "$keep_file" || rm -f "matomo/$path"
+              done
+      - name: running tests
+        uses: matomo-org/github-action-tests@main
+        with:
+          test-type: 'SystemTestsPlugins'
+          mysql-driver: ${{ matrix.adapter }}
+          mysql-engine: ${{ matrix.mysql-engine }}
+          mysql-version: ${{ matrix.mysql-version }}
+          php-version: ${{ matrix.php }}
+          redis-service: true
+          artifacts-pass: ${{ secrets.ARTIFACTS_PASS }}
+          upload-artifacts: ${{ matrix.php == '7.2' }}
+          testomatio: ${{ secrets.TESTOMATIO_INTEGRATION }}
+          testomatio-force-report: ${{ contains('schedule,push', github.event_name) && github.run_attempt < 2 }}
+  generate-integration-core-matrix:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.generate.outputs.integration_core_matrix }}
+      count: ${{ steps.generate.outputs.integration_core_count }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: false
+          persist-credentials: false
+          submodules: true
+          path: matomo
+          ref: ${{ inputs.ref || github.ref }}
+      - name: Generate matrix
+        id: generate
+        run: |
+          python3 matomo/.github/scripts/generate_matomo_test_matrices.py \
+            --repo-root matomo \
+            --type integration-core \
+            --bucket-count "${{ vars.MATOMO_INTEGRATION_CORE_BUCKET_COUNT || 2 }}"
+  IntegrationTestsCore:
+    name: IntegrationTestsCore (${{ matrix.bucket-label }}, ${{ matrix.php }}, ${{ matrix.adapter }}, ${{ matrix.mysql-engine }}, ${{ matrix.mysql-version }})
+    needs: generate-integration-core-matrix
+    if: ${{ needs.generate-integration-core-matrix.outputs.count != '0' }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: ${{ inputs.is_preview == true }}
+      max-parallel: ${{ fromJson(vars.MATOMO_INTEGRATION_CORE_MAX_PARALLEL || '2') }}
+      matrix:
+        include: ${{ fromJson(needs.generate-integration-core-matrix.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: false
+          persist-credentials: false
+          submodules: true
+          path: matomo
+          ref: ${{ inputs.ref || github.ref }}
+      - name: Prune to bucket
+        shell: bash
+        run: |
+          keep_file="$(mktemp)"
+          cat > "$keep_file" <<'KEEP_PATHS_EOF'
+          ${{ matrix.keep-paths }}
+          KEEP_PATHS_EOF
+          python3 matomo/.github/scripts/generate_matomo_test_matrices.py \
+            --repo-root matomo \
+            --type integration-core \
+            --list-in-scope \
+            | while IFS= read -r path; do
+                [ -n "$path" ] || continue
+                grep -Fxq "$path" "$keep_file" || rm -f "matomo/$path"
+              done
+      - name: running tests
+        uses: matomo-org/github-action-tests@main
+        with:
+          test-type: 'IntegrationTestsCore'
+          mysql-driver: ${{ matrix.adapter }}
+          mysql-engine: ${{ matrix.mysql-engine }}
+          mysql-version: ${{ matrix.mysql-version }}
+          php-version: ${{ matrix.php }}
+          redis-service: true
+          artifacts-pass: ${{ secrets.ARTIFACTS_PASS }}
+          upload-artifacts: ${{ matrix.php == '7.2' }}
+          testomatio: ${{ secrets.TESTOMATIO_INTEGRATION }}
+          testomatio-force-report: ${{ contains('schedule,push', github.event_name) && github.run_attempt < 2 }}
+  generate-integration-plugins-matrix:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.generate.outputs.integration_plugins_matrix }}
+      count: ${{ steps.generate.outputs.integration_plugins_count }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: false
+          persist-credentials: false
+          submodules: true
+          path: matomo
+          ref: ${{ inputs.ref || github.ref }}
+      - name: Generate matrix
+        id: generate
+        run: |
+          python3 matomo/.github/scripts/generate_matomo_test_matrices.py \
+            --repo-root matomo \
+            --type integration-plugins \
+            --bucket-count "${{ vars.MATOMO_INTEGRATION_PLUGINS_BUCKET_COUNT || 10 }}"
+  IntegrationTestsPlugins:
+    name: IntegrationTestsPlugins (${{ matrix.bucket-label }}, ${{ matrix.php }}, ${{ matrix.adapter }}, ${{ matrix.mysql-engine }}, ${{ matrix.mysql-version }})
+    needs: generate-integration-plugins-matrix
+    if: ${{ needs.generate-integration-plugins-matrix.outputs.count != '0' }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: ${{ inputs.is_preview == true }}
+      max-parallel: ${{ fromJson(vars.MATOMO_INTEGRATION_PLUGINS_MAX_PARALLEL || '15') }}
+      matrix:
+        include: ${{ fromJson(needs.generate-integration-plugins-matrix.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: false
+          persist-credentials: false
+          submodules: true
+          path: matomo
+          ref: ${{ inputs.ref || github.ref }}
+      - name: Prune to bucket
+        shell: bash
+        run: |
+          keep_file="$(mktemp)"
+          cat > "$keep_file" <<'KEEP_PATHS_EOF'
+          ${{ matrix.keep-paths }}
+          KEEP_PATHS_EOF
+          python3 matomo/.github/scripts/generate_matomo_test_matrices.py \
+            --repo-root matomo \
+            --type integration-plugins \
+            --list-in-scope \
+            | while IFS= read -r path; do
+                [ -n "$path" ] || continue
+                grep -Fxq "$path" "$keep_file" || rm -f "matomo/$path"
+              done
+      - name: running tests
+        uses: matomo-org/github-action-tests@main
+        with:
+          test-type: 'IntegrationTestsPlugins'
+          mysql-driver: ${{ matrix.adapter }}
+          mysql-engine: ${{ matrix.mysql-engine }}
+          mysql-version: ${{ matrix.mysql-version }}
+          php-version: ${{ matrix.php }}
+          redis-service: true
+          artifacts-pass: ${{ secrets.ARTIFACTS_PASS }}
+          upload-artifacts: ${{ matrix.php == '7.2' }}
           testomatio: ${{ secrets.TESTOMATIO_INTEGRATION }}
           testomatio-force-report: ${{ contains('schedule,push', github.event_name) && github.run_attempt < 2 }}
   Javascript:
@@ -269,7 +471,20 @@ jobs:
   ci-required:
     name: All required tests passed
     if: ${{ always() }}
-    needs: [ PHP, Javascript, Client, generate-plugin-ui-matrices, UI-plugins, UI-core ]
+    needs:
+      - PHP
+      - PHP-extra
+      - Javascript
+      - Client
+      - generate-plugin-ui-matrices
+      - UI-plugins
+      - UI-core
+      - generate-system-plugins-matrix
+      - SystemTestsPlugins
+      - generate-integration-core-matrix
+      - IntegrationTestsCore
+      - generate-integration-plugins-matrix
+      - IntegrationTestsPlugins
     runs-on: ubuntu-24.04
     steps:
       - name: Verify required jobs succeeded
@@ -279,7 +494,12 @@ jobs:
         with:
           script: |
             const needs = JSON.parse(process.env.NEEDS_JSON);
-            const pluginCount = needs['generate-plugin-ui-matrices'].outputs.plugin_count || '0';
+            const allowedSkipWhenZero = {
+              'UI-plugins': needs['generate-plugin-ui-matrices']?.outputs?.plugin_count,
+              'SystemTestsPlugins': needs['generate-system-plugins-matrix']?.outputs?.count,
+              'IntegrationTestsCore': needs['generate-integration-core-matrix']?.outputs?.count,
+              'IntegrationTestsPlugins': needs['generate-integration-plugins-matrix']?.outputs?.count,
+            };
 
             for (const [jobName, jobData] of Object.entries(needs)) {
               const result = jobData.result;
@@ -289,7 +509,7 @@ jobs:
               }
 
               if (result === 'skipped') {
-                if (jobName === 'UI-plugins' && pluginCount === '0') {
+                if (jobName in allowedSkipWhenZero && (allowedSkipWhenZero[jobName] || '0') === '0') {
                   continue;
                 }
 
