@@ -100,35 +100,52 @@ def _discover_integration_plugins(repo_root: Path) -> list[Path]:
 
 
 def find_base_files(files: list[Path]) -> set[Path]:
-    """Return the subset of files whose declared class is `extends`-targeted by
-    another file in the input list.
+    """Return files whose declared class is referenced by another in-scope
+    file. Such files must stay in every bucket — deleting them breaks PHP's
+    autoloader for their referrers.
 
-    Such files (typically `abstract class XxxTest extends ...`) must stay in
-    every bucket's keep-list — deleting them breaks PHPUnit's autoloader for
-    their subclasses, which are runnable tests living in other buckets. Only
-    cross-file references count; classes that extend a sibling declared in
-    the same file (e.g. inner fixture classes) don't pin the file.
+    We look for four PHP reference patterns (which between them cover
+    extends, use, static calls, and instantiation):
+
+        \\X            — qualified reference (use ..\\X; extends \\..\\X; ..)
+        extends X      — bare extends in same namespace
+        X::            — static access or ::class
+        new X          — instantiation
+
+    Conservative but precise: a class name appearing in a comment or string
+    won't be flagged unless it matches one of those concrete syntaxes.
     """
     classes_in_file: dict[Path, set[str]] = {}
-    extends_in_file: dict[Path, set[str]] = {}
-
+    text_cache: dict[Path, str] = {}
     for path in files:
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        classes_in_file[path] = {m.group(1) for m in CLASS_DECLARATION_RE.finditer(text)}
-        extends_in_file[path] = {
-            m.group(1).rsplit("\\", 1)[-1] for m in EXTENDS_RE.finditer(text)
+        text_cache[path] = text
+        classes_in_file[path] = {
+            m.group(1) for m in CLASS_DECLARATION_RE.finditer(text)
         }
 
-    bases: set[Path] = set()
+    name_to_paths: dict[str, set[Path]] = {}
     for path, classes in classes_in_file.items():
-        for other_path, other_extends in extends_in_file.items():
-            if other_path == path:
+        for name in classes:
+            name_to_paths.setdefault(name, set()).add(path)
+
+    bases: set[Path] = set()
+    for name, declaring_paths in name_to_paths.items():
+        escaped = re.escape(name)
+        pattern = re.compile(
+            rf"(?:\\{escaped}\b"
+            rf"|\bextends\s+{escaped}\b"
+            rf"|\b{escaped}::"
+            rf"|\bnew\s+{escaped}\b)"
+        )
+        for other_path, other_text in text_cache.items():
+            if other_path in declaring_paths:
                 continue
-            if classes & other_extends:
-                bases.add(path)
+            if pattern.search(other_text):
+                bases.update(declaring_paths)
                 break
     return bases
 
@@ -163,19 +180,28 @@ def build_units(
             ):
                 pinned_plugins.add(parts[1])
 
+    # Default: each pinned plugin is its own atomic unit.
+    plugin_to_unit = {plugin: plugin for plugin in pinned_plugins}
+    # Cross-plugin filesystem scan: TestRunner's CheckDirectDependencyUseCommandTest
+    # has a data provider that scans the Provider plugin too (see
+    # plugins/TestRunner/tests/System/CheckDirectDependencyUseCommandTest.php),
+    # so the two plugins must share a bucket.
+    if "TestRunner" in plugin_to_unit and "Provider" in plugin_to_unit:
+        plugin_to_unit["Provider"] = "TestRunner"
+
     plugin_groups: dict[str, list[str]] = {}
     loose: list[str] = []
     for rel in relative:
         if rel in base_paths:
             continue
         parts = rel.split("/")
-        if len(parts) >= 2 and parts[0] == "plugins" and parts[1] in pinned_plugins:
-            plugin_groups.setdefault(parts[1], []).append(rel)
+        if len(parts) >= 2 and parts[0] == "plugins" and parts[1] in plugin_to_unit:
+            plugin_groups.setdefault(plugin_to_unit[parts[1]], []).append(rel)
         else:
             loose.append(rel)
 
     units: list[tuple[str, list[str]]] = []
-    units.extend((plugin, sorted(paths)) for plugin, paths in plugin_groups.items())
+    units.extend((unit_id, sorted(paths)) for unit_id, paths in plugin_groups.items())
     units.extend((rel, [rel]) for rel in loose)
     return units
 
