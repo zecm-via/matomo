@@ -133,24 +133,74 @@ def find_base_files(files: list[Path]) -> set[Path]:
     return bases
 
 
-def round_robin_buckets(
-    eligible: list[str], always_keep: list[str], requested_count: int
-) -> list[list[str]]:
-    """Round-robin distribute `eligible` files into N buckets and append
-    `always_keep` (base test classes) to every non-empty bucket so they're
-    never deleted by the filter step.
+def build_units(
+    relative: list[str], type_arg: str, base_paths: set[str]
+) -> list[tuple[str, list[str]]]:
+    """Construct atomic bucketing units. Each unit goes to exactly one bucket.
+
+    Pinned-plugin grouping: some tests scan their plugin's own filesystem at
+    runtime (currently only `CheckDirectDependencyUseCommandTest`, found in
+    `system-plugins`). If those files get split across buckets, the on-disk
+    assertion fails. So every in-scope file of any plugin containing such a
+    test is grouped into a single unit and travels together.
+
+    Everything else (and every file under `integration-core`/`-plugins`,
+    where no equivalent check exists) becomes its own single-file unit, so
+    the assignment falls back to pure file-count distribution.
+
+    Base classes (`base_paths`) are excluded from units — they're appended
+    to every bucket by the caller.
     """
-    if not eligible and not always_keep:
+    pinned_filename = "CheckDirectDependencyUseCommandTest.php"
+    pinned_plugins: set[str] = set()
+    if type_arg == "system-plugins":
+        for rel in relative:
+            parts = rel.split("/")
+            if (
+                len(parts) >= 2
+                and parts[0] == "plugins"
+                and parts[-1] == pinned_filename
+            ):
+                pinned_plugins.add(parts[1])
+
+    plugin_groups: dict[str, list[str]] = {}
+    loose: list[str] = []
+    for rel in relative:
+        if rel in base_paths:
+            continue
+        parts = rel.split("/")
+        if len(parts) >= 2 and parts[0] == "plugins" and parts[1] in pinned_plugins:
+            plugin_groups.setdefault(parts[1], []).append(rel)
+        else:
+            loose.append(rel)
+
+    units: list[tuple[str, list[str]]] = []
+    units.extend((plugin, sorted(paths)) for plugin, paths in plugin_groups.items())
+    units.extend((rel, [rel]) for rel in loose)
+    return units
+
+
+def assign_to_buckets(
+    units: list[tuple[str, list[str]]], requested_count: int
+) -> list[list[str]]:
+    """Greedy bin-pack: largest unit first into the least-loaded bucket.
+
+    When all units are single files (no pinned-plugin grouping) this
+    degenerates to perfect round-robin balance — same result as a modulo
+    distribution, just expressed as a single algorithm that also handles
+    grouped units correctly.
+    """
+    if not units:
         return []
-    if not eligible:
-        return [list(always_keep)]
-    count = max(1, min(requested_count, len(eligible)))
+    sorted_units = sorted(units, key=lambda unit: (-len(unit[1]), unit[0]))
+    count = max(1, min(requested_count, len(sorted_units)))
     buckets: list[list[str]] = [[] for _ in range(count)]
-    for index, path in enumerate(eligible):
-        buckets[index % count].append(path)
-    for bucket in buckets:
-        bucket.extend(always_keep)
-    return buckets
+    weights = [0] * count
+    for _, files in sorted_units:
+        target = min(range(count), key=lambda i: (weights[i], i))
+        buckets[target].extend(files)
+        weights[target] += len(files)
+    return [bucket for bucket in buckets if bucket]
 
 
 def load_php_environments() -> list[dict]:
@@ -241,14 +291,15 @@ def main(argv: list[str]) -> int:
         parser.error("--bucket-count is required unless --list-in-scope is given")
 
     base_paths = find_base_files(files)
-    always_keep = [
-        path.relative_to(repo_root).as_posix() for path in sorted(base_paths)
-    ]
+    always_keep = sorted(path.relative_to(repo_root).as_posix() for path in base_paths)
     always_keep_set = set(always_keep)
-    eligible = [path for path in relative if path not in always_keep_set]
+
+    units = build_units(relative, args.type, always_keep_set)
+    buckets = assign_to_buckets(units, args.bucket_count)
+    for bucket in buckets:
+        bucket.extend(always_keep)
 
     environments = load_php_environments()
-    buckets = round_robin_buckets(eligible, always_keep, args.bucket_count)
     matrix = build_matrix(buckets, environments)
 
     emit_outputs(TYPE_KEYS[args.type], matrix)
