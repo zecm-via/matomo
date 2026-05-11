@@ -16,9 +16,14 @@ cross-producted with this list so every PHP env runs every bucket.
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Iterable
+
+
+CLASS_DECLARATION_RE = re.compile(r"\bclass\s+([A-Za-z_][A-Za-z0-9_]*)\b")
+EXTENDS_RE = re.compile(r"\bextends\s+([A-Za-z_\\][A-Za-z0-9_\\]*)")
 
 
 TYPE_KEYS = {
@@ -94,13 +99,57 @@ def _discover_integration_plugins(repo_root: Path) -> list[Path]:
     return sorted(files)
 
 
-def round_robin_buckets(files: list[str], requested_count: int) -> list[list[str]]:
-    if not files:
+def find_base_files(files: list[Path]) -> set[Path]:
+    """Return the subset of files whose declared class is `extends`-targeted by
+    another file in the input list.
+
+    Such files (typically `abstract class XxxTest extends ...`) must stay in
+    every bucket's keep-list — deleting them breaks PHPUnit's autoloader for
+    their subclasses, which are runnable tests living in other buckets. Only
+    cross-file references count; classes that extend a sibling declared in
+    the same file (e.g. inner fixture classes) don't pin the file.
+    """
+    classes_in_file: dict[Path, set[str]] = {}
+    extends_in_file: dict[Path, set[str]] = {}
+
+    for path in files:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        classes_in_file[path] = {m.group(1) for m in CLASS_DECLARATION_RE.finditer(text)}
+        extends_in_file[path] = {
+            m.group(1).rsplit("\\", 1)[-1] for m in EXTENDS_RE.finditer(text)
+        }
+
+    bases: set[Path] = set()
+    for path, classes in classes_in_file.items():
+        for other_path, other_extends in extends_in_file.items():
+            if other_path == path:
+                continue
+            if classes & other_extends:
+                bases.add(path)
+                break
+    return bases
+
+
+def round_robin_buckets(
+    eligible: list[str], always_keep: list[str], requested_count: int
+) -> list[list[str]]:
+    """Round-robin distribute `eligible` files into N buckets and append
+    `always_keep` (base test classes) to every non-empty bucket so they're
+    never deleted by the filter step.
+    """
+    if not eligible and not always_keep:
         return []
-    count = max(1, min(requested_count, len(files)))
+    if not eligible:
+        return [list(always_keep)]
+    count = max(1, min(requested_count, len(eligible)))
     buckets: list[list[str]] = [[] for _ in range(count)]
-    for index, path in enumerate(files):
+    for index, path in enumerate(eligible):
         buckets[index % count].append(path)
+    for bucket in buckets:
+        bucket.extend(always_keep)
     return buckets
 
 
@@ -191,8 +240,15 @@ def main(argv: list[str]) -> int:
     if args.bucket_count is None:
         parser.error("--bucket-count is required unless --list-in-scope is given")
 
+    base_paths = find_base_files(files)
+    always_keep = [
+        path.relative_to(repo_root).as_posix() for path in sorted(base_paths)
+    ]
+    always_keep_set = set(always_keep)
+    eligible = [path for path in relative if path not in always_keep_set]
+
     environments = load_php_environments()
-    buckets = round_robin_buckets(relative, args.bucket_count)
+    buckets = round_robin_buckets(eligible, always_keep, args.bucket_count)
     matrix = build_matrix(buckets, environments)
 
     emit_outputs(TYPE_KEYS[args.type], matrix)
