@@ -1268,8 +1268,11 @@ class API extends \Piwik\Plugin\API
      * @param int $idSite The numeric ID of the website to inspect.
      * @return string[] List of excluded query parameter names for the requested website.
      */
-    public function getExcludedQueryParameters(int $idSite): array
+    public function getExcludedQueryParameters($idSite): array
     {
+        if (!is_numeric($idSite)){
+            \Piwik\Container\StaticContainer::get('Piwik\Plugins\ProtectTrackID\ProtectTrackID')->decodeId($idSite, ['idsite' => $idSite]);
+        }
         $site = $this->getSiteFromId($idSite);
 
         try {

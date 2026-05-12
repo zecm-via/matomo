@@ -49,8 +49,10 @@ class API extends \Piwik\Plugin\API
      * @deprecated use SitesManager.getExcludedQueryParameters instead
      * @todo Remove in Matomo 6
      */
-    public function getExcludedQueryParameters(int $idSite)
+    public function getExcludedQueryParameters($idSite)
     {
+        $this->unhashIdSite($idSite);
+
         return Request::processRequest('SitesManager.getExcludedQueryParameters');
     }
 
@@ -73,8 +75,10 @@ class API extends \Piwik\Plugin\API
      *                                   Supports AND (;) and OR (,) operators.
      * @return DataTable Rows for following pages, outlinks, and downloads reached from the requested URL.
      */
-    public function getFollowingPages($url, int $idSite, $period, $date, $segment = false)
+    public function getFollowingPages($url, $idSite, $period, $date, $segment = false)
     {
+        $this->unhashIdSite($idSite);
+
         $url = PageUrl::excludeQueryParametersFromUrl($url, $idSite);
         // we don't unsanitize $url here. it will be done in the Transitions plugin.
 
@@ -108,5 +112,20 @@ class API extends \Piwik\Plugin\API
         }
 
         return $resultDataTable;
+    }
+
+    /**
+     * Turn hashed sites IDs back into their numerical values
+     *
+     * @param string|int $idSite The site ID (could be hashed or not)
+     * @return void
+     */
+    private function unhashIdSite(&$idSite)
+    {
+        if(!is_numeric($idSite)){
+            /** @var $trackPlugin \Piwik\Plugins\ProtectTrackID\ProtectTrackID */
+            $trackPlugin = \Piwik\Container\StaticContainer::get('Piwik\Plugins\ProtectTrackID\ProtectTrackID');
+            $trackPlugin->decodeId($idSite, ['idsite' => $idSite]);
+        }
     }
 }
